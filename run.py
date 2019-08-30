@@ -3,6 +3,9 @@ import yaml
 
 import iio
 
+import os
+ROOT = os.path.dirname(os.path.realpath(__file__))
+
 def read_tensor(path, tobatch=True, cpu=False):
     v = iio.read(path)
     v = torch.FloatTensor(v, device='cpu')
@@ -20,20 +23,27 @@ def write_tensor(path, tensor):
 def load_net():
     from models.models import get_model
     from models.networks import get_nets
-    with open('config/config.yaml', 'r') as f:
+    with open(f'{ROOT}/config/config.yaml', 'r') as f:
         config = yaml.load(f)
     netG, netD = get_nets(config['model'])
     netG.cuda()
-    chk = torch.load('fpn_inception.h5')
+    chk = torch.load(f'{ROOT}/fpn_inception.h5')
     netG.load_state_dict(chk['model'])
     return netG
 
-def deblur(input, output, normalize=1):
+def deblur(input, output, normalization=1):
     net = load_net()
 
-    im = read_tensor(input)/normalize
-    deblurred = net(im)
-    write_tensor(output, deblurred*normalize)
+    assert(type(input) == type(output))
+    if type(input) not in (tuple, list):
+        input = (input,)
+        output = (output,)
+
+    for input, output in zip(input, output):
+        print(input, output)
+        im = read_tensor(input)/normalization
+        deblurred = net(im)
+        write_tensor(output, deblurred*normalization)
 
 if __name__ == '__main__':
     import fire
