@@ -39,7 +39,7 @@ val:
   corrupt: *CORRUPT
 
 phase: train
-warmup_num: 3
+warmup_num: 1
 model:
   g_name: fpn_inception
   blocks: 9
@@ -47,7 +47,8 @@ model:
   d_layers: 3
   content_loss: perceptual
   adv_lambda: 0.001
-  disc_loss: wgan-gp
+  # disc_loss: wgan-gp
+  disc_loss: ragan-ls
   learn_residual: True
   norm_layer: instance
   dropout: True
