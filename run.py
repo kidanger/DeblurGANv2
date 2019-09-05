@@ -20,19 +20,21 @@ def write_tensor(path, tensor):
     tensor = tensor.permute((0, 2, 3, 1)).squeeze()
     iio.write(path, tensor.cpu().detach().numpy())
 
-def load_net():
+def load_net(weights):
     from models.models import get_model
     from models.networks import get_nets
     with open(f'{ROOT}/config/config.yaml', 'r') as f:
         config = yaml.load(f)
     netG, netD = get_nets(config['model'])
     netG.cuda()
-    chk = torch.load(f'{ROOT}/fpn_inception.h5')
+    chk = torch.load(weights)
     netG.load_state_dict(chk['model'])
     return netG
 
-def deblur(input, output, normalization=1):
-    net = load_net()
+def deblur(input, output, normalization=1, weights=None):
+    if not weights:
+        weights = f'{ROOT}/fpn_inception.h5'
+    net = load_net(weights)
 
     assert(type(input) == type(output))
     if type(input) not in (tuple, list):
@@ -42,7 +44,7 @@ def deblur(input, output, normalization=1):
     for input, output in zip(input, output):
         print(input, output)
         im = read_tensor(input)/normalization
-        deblurred = net(im)
+        deblurred = (net(im*2-1)+1)/2
         write_tensor(output, deblurred*normalization)
 
 if __name__ == '__main__':
