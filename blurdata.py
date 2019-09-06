@@ -9,12 +9,13 @@ from generate_kernel import generate_kernel
 import iio
 from skimage.transform import resize
 import functools
-@functools.lru_cache(maxsize=20)
+from skimage.io import imread
+
 def get_image(file):
-    img = iio.read(file) / 255
-    img = resize(img, (img.shape[0]//1.5,img.shape[1]//1.5), order=0,
-                 anti_aliasing=True, anti_aliasing_sigma=(0.6,0.6,0), clip=False)
-    img = img.clip(0, 1)
+    img = imread(file) / 255
+    # img = resize(img, (img.shape[0]//1.5,img.shape[1]//1.5), order=0, mode='reflect',
+                 # anti_aliasing=True, anti_aliasing_sigma=(0.6,0.6,0), clip=False)
+    # img = img.clip(0, 1)
     img = torch.FloatTensor(img)
     img = img.permute((2,0,1))
     return img
@@ -28,21 +29,34 @@ class SyntheticDatasetFromFiles(data.Dataset):
         self.image_filenames = images
         self.transform = transform or (lambda x, k: x, x)
         self.val = val
+        self.kernels = []
+        self.random = random.Random(0)
+        if val:
+            for i in range(100):
+                ks = self.random.randint(9, 51)
+                ks += (ks+1) % 2
+                k = generate_kernel(ks, rand=self.random)
+                k = torch.FloatTensor(k, device='cpu')
+                k = k.unsqueeze(0)
+                self.kernels.append(k)
 
     def __getitem__(self, index):
         with torch.no_grad():
-            ks = random.randint(9, 51)
-            ks += (ks+1) % 2
-            k = generate_kernel(ks)
-            k = torch.FloatTensor(k, device='cpu')
-            k = k.unsqueeze(0)
+            if self.kernels:
+                k = self.kernels[index % len(self.kernels)]
+            else:
+                ks = self.random.randint(9, 51)
+                ks += (ks+1) % 2
+                k = generate_kernel(ks)
+                k = torch.FloatTensor(k, device='cpu')
+                k = k.unsqueeze(0)
             input = get_image(self.image_filenames[index % len(self.image_filenames)])
             crop = center_crop if self.val else random_crop
             input = crop(input, 256 + max(k.size()))
             input, target = self.transform(input, k, train=not self.val)
-            if random.random()<0.01:
-                U.write_tensor('input.tif', input.unsqueeze(0))
-                U.write_tensor('target.tif', target.unsqueeze(0))
+            # if random.random()<0.01:
+                # U.write_tensor('input.tif', input.unsqueeze(0))
+                # U.write_tensor('target.tif', target.unsqueeze(0))
         return {'a': input, 'b': target}
 
     def __len__(self):

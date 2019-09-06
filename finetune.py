@@ -8,6 +8,7 @@ import tqdm
 import yaml
 from joblib import cpu_count
 from torch.utils.data import DataLoader
+import glob
 
 from adversarial_trainer import GANFactory
 from dataset import PairedDataset
@@ -16,8 +17,6 @@ from models.losses import get_loss
 from models.models import get_model
 from models.networks import get_nets
 from schedulers import LinearDecay, WarmRestart
-
-cv2.setNumThreads(0)
 
 
 class Trainer:
@@ -32,7 +31,8 @@ class Trainer:
     def train(self):
         self.warmup = True
         self.optimizer_G = self._get_optim([torch.nn.Parameter(torch.Tensor([1]))])
-        for epoch in range(0, config['num_epochs']):
+        self.bootstrap_discriminator()
+        for epoch in range(0, self.config['num_epochs']):
             if (epoch == self.warmup_epochs) and not (self.warmup_epochs == 0):
                 self.netG.module.unfreeze()
                 self.optimizer_G = self._get_optim(self.netG.parameters())
@@ -55,12 +55,32 @@ class Trainer:
             logging.debug("Experiment Name: %s, Epoch: %d, Loss: %s" % (
                 self.config['experiment_desc'], epoch, self.metric_counter.loss_message()))
 
+    def bootstrap_discriminator(self):
+        for param_group in self.optimizer_G.param_groups:
+            lr = param_group['lr']
+
+        epoch_size = self.config.get('train_batches_per_epoch') or len(self.train_dataset)
+        epoch_size //= 3
+        tq = tqdm.tqdm(self.train_dataset, total=epoch_size)
+        tq.set_description('bootstrap, lr {}'.format(lr))
+        i = 0
+        for data in tq:
+            inputs, targets = self.model.get_input(data)
+            self._update_d(inputs, targets)
+            self._update_d(inputs, targets)
+            self._update_d(inputs, targets)
+            tq.set_postfix(loss=self.metric_counter.loss_message())
+            i += 1
+            if i > epoch_size:
+                break
+        tq.close()
+
     def _run_epoch(self, epoch):
         self.metric_counter.clear()
         for param_group in self.optimizer_G.param_groups:
             lr = param_group['lr']
 
-        epoch_size = config.get('train_batches_per_epoch') or len(self.train_dataset)
+        epoch_size = self.config.get('train_batches_per_epoch') or len(self.train_dataset)
         tq = tqdm.tqdm(self.train_dataset, total=epoch_size)
         tq.set_description('Epoch {}, lr {}'.format(epoch, lr))
         i = 0
@@ -89,7 +109,7 @@ class Trainer:
 
     def _validate(self, epoch):
         self.metric_counter.clear()
-        epoch_size = config.get('val_batches_per_epoch') or len(self.val_dataset)
+        epoch_size = self.config.get('val_batches_per_epoch') or len(self.val_dataset)
         tq = tqdm.tqdm(self.val_dataset, total=epoch_size)
         tq.set_description('Validation')
         i = 0
@@ -104,6 +124,12 @@ class Trainer:
             self.metric_counter.add_metrics(curr_psnr, curr_ssim)
             if not i:
                 self.metric_counter.add_image(img_for_vis, tag='val')
+            import utils as U
+            expname = self.config['experiment_desc']
+            if epoch == 0:
+                U.write_tensor(f'{expname}/val_{epoch}_{i}_input.tif', inputs)
+                U.write_tensor(f'{expname}/val_{epoch}_{i}_target.tif', targets)
+            U.write_tensor(f'{expname}/val_{epoch}_{i}_output.tif', outputs)
             i += 1
             if i > epoch_size:
                 break
@@ -176,26 +202,34 @@ class Trainer:
         self.netG.load_state_dict(state['model'])
 
 
-if __name__ == '__main__':
-    with open('config/config.yaml', 'r') as f:
+def finetune(config_path):
+    with open(config_path, 'r') as f:
         config = yaml.load(f)
+    expname = config['experiment_desc']
+    import os
+    os.system(f'rm "{expname}"/*')
 
     batch_size = config.pop('batch_size')
-    get_dataloader = partial(DataLoader, batch_size=batch_size, num_workers=cpu_count(), shuffle=True, drop_last=True)
+    get_dataloader = partial(DataLoader, batch_size=batch_size, num_workers=cpu_count()//2,
+                             shuffle=False, drop_last=True, pin_memory=True)
 
     import blurdata
-    datasets = map(config.pop, ('train', 'val'))
-    datasets = map(PairedDataset.from_config, datasets)
 
-    tr = blurdata.get_transform(256, 0, circular=False)
-    import glob
+    sigma = config['train']['sigma']
+    print('sigma:', sigma)
+    tr = blurdata.get_transform(256, sigma, circular=False)
     datasets = (
-        blurdata.SyntheticDatasetFromFiles(glob.glob('/home/anger/datasets/hdr+/train/*.jpg'), transform=tr),
-        blurdata.SyntheticDatasetFromFiles(glob.glob('/home/anger/datasets/hdr+/train/*.jpg'), transform=tr, val=True),
+        blurdata.SyntheticDatasetFromFiles(glob.glob('/mnt/cdisk/anger/hdr+/trainresize/*'), transform=tr),
+        blurdata.SyntheticDatasetFromFiles(glob.glob('/mnt/cdisk/anger/hdr+/trainresize/*'), transform=tr, val=True),
     )
 
-    train, val = map(get_dataloader, datasets)
+    train = get_dataloader(datasets[0], batch_size=batch_size)
+    val = get_dataloader(datasets[1], batch_size=1)
     trainer = Trainer(config, train=train, val=val)
-    trainer.load_checkpoint('fpn_inception.h5')
+    trainer.load_checkpoint(config['load_checkpoint'])
     trainer.train()
+
+if __name__ == '__main__':
+    import fire
+    fire.Fire(finetune)
 

@@ -4,10 +4,10 @@
 import os
 import math
 import numpy as np
-import numpy.random
 from PIL import Image
 import scipy.ndimage
 import scipy.signal
+import random
 
 def center_kernel(x):
     dx = np.sum(range(1, x.shape[1]+1) * np.sum(x, axis=1))
@@ -17,25 +17,25 @@ def center_kernel(x):
     y = scipy.ndimage.shift(x, [dx, dy], order=0)
     return y
 
-def generate_kernel(s):
+def generate_kernel(s, rand=None):
+    if not rand:
+        rand = random
     s2 = s * 8
     k = np.zeros((s2, s2)).astype('float32')
-
-    import random
 
     dx, dy = 0, 0
     x = s2 // 2
     y = s2 // 2
     v = 1
     dt = 0.06
-    m = numpy.random.normal() + 4
+    m = rand.gauss(4, 1)
 
     for j in range(100):
-        dx = min(m, max(-m, dx + numpy.random.normal()*2))
-        dy = min(m, max(-m, dy + numpy.random.normal()*2))
+        dx = min(m, max(-m, dx + rand.gauss(0, 2)))
+        dy = min(m, max(-m, dy + rand.gauss(0, 2)))
         x += dx * dt
         y += dy * dt
-        v = max(1e-4, v + numpy.random.normal())
+        v = max(1e-4, v + rand.gauss(0, 1))
 
         xL = math.floor(x)
         xH = xL + 1
